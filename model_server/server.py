@@ -50,11 +50,99 @@ POSTURE_CLASSES = [
 ]
 
 model = None
+model_info: Dict[str, Any] = {}  # Extracted model metadata
+
+
+def _extract_model_info(yolo_model) -> Dict[str, Any]:
+    """Extract detailed metadata from a loaded YOLO model."""
+    info: Dict[str, Any] = {}
+    try:
+        nn_model = yolo_model.model  # The underlying torch nn.Module
+
+        # Basic identity
+        info["model_path"] = MODEL_PATH
+        info["task"] = getattr(yolo_model, "task", "detect")
+        info["model_name"] = getattr(yolo_model, "ckpt_path", MODEL_PATH).split("/")[-1].split("\\")[-1]
+
+        # Class names
+        names = yolo_model.names  # dict {0: 'Listening', 1: 'Looking Screen', ...}
+        info["num_classes"] = len(names)
+        info["class_names"] = names
+
+        # Parameter counts
+        total_params = sum(p.numel() for p in nn_model.parameters())
+        trainable_params = sum(p.numel() for p in nn_model.parameters() if p.requires_grad)
+        info["total_parameters"] = total_params
+        info["trainable_parameters"] = trainable_params
+        info["total_parameters_millions"] = round(total_params / 1e6, 2)
+
+        # Model architecture YAML (if available)
+        if hasattr(nn_model, "yaml"):
+            info["architecture"] = nn_model.yaml
+        if hasattr(nn_model, "yaml_file"):
+            info["architecture_variant"] = nn_model.yaml_file
+
+        # Input image size
+        if hasattr(yolo_model, "overrides"):
+            info["input_size"] = yolo_model.overrides.get("imgsz", 640)
+
+        # Layer info
+        layer_types: Dict[str, int] = {}
+        total_layers = 0
+        for module in nn_model.modules():
+            layer_name = type(module).__name__
+            layer_types[layer_name] = layer_types.get(layer_name, 0) + 1
+            total_layers += 1
+        info["total_layers"] = total_layers
+        info["layer_types"] = layer_types
+
+        # GFLOPs and speed (if available from training results)
+        if hasattr(nn_model, "info"):
+            try:
+                # This returns a tuple (layers, params, gradients, flops)
+                info_tuple = nn_model.info(verbose=False)
+                if isinstance(info_tuple, tuple) and len(info_tuple) >= 4:
+                    info["gflops"] = round(info_tuple[3], 2)
+            except Exception:
+                pass
+
+        # Training metadata (if saved in checkpoint)
+        if hasattr(yolo_model, "ckpt") and yolo_model.ckpt:
+            ckpt = yolo_model.ckpt
+            if isinstance(ckpt, dict):
+                if "epoch" in ckpt:
+                    info["trained_epochs"] = ckpt["epoch"]
+                if "best_fitness" in ckpt:
+                    info["best_fitness"] = round(float(ckpt["best_fitness"]), 4)
+                if "date" in ckpt:
+                    info["training_date"] = ckpt["date"]
+                # Training args
+                train_args = ckpt.get("train_args", {})
+                if train_args:
+                    info["training_config"] = {
+                        k: v for k, v in train_args.items()
+                        if k in (
+                            "epochs", "batch", "imgsz", "optimizer", "lr0", "lrf",
+                            "momentum", "weight_decay", "data", "device", "workers",
+                            "patience", "augment", "model",
+                        )
+                    }
+
+        # File size
+        if os.path.exists(MODEL_PATH):
+            size_bytes = os.path.getsize(MODEL_PATH)
+            info["file_size_mb"] = round(size_bytes / (1024 * 1024), 2)
+
+    except Exception as e:
+        logger.warning(f"Could not extract some model info: {e}")
+        info["extraction_warning"] = str(e)
+
+    return info
 
 
 def load_model():
     """Load the YOLO model from the .pt file."""
-    global model
+    global model, model_info
     try:
         from ultralytics import YOLO
 
@@ -63,12 +151,17 @@ def load_model():
                 f"Model file not found at {MODEL_PATH}. Using demo mode (random detections)."
             )
             model = None
+            model_info = {"mode": "demo", "reason": "Model file not found"}
             return
         model = YOLO(MODEL_PATH)
+        model_info = _extract_model_info(model)
         logger.info(f"Model loaded successfully from {MODEL_PATH}")
+        logger.info(f"Model info: {model_info.get('total_parameters_millions', '?')}M params, "
+                     f"{model_info.get('num_classes', '?')} classes")
     except Exception as e:
         logger.error(f"Failed to load model: {e}. Running in demo mode.")
         model = None
+        model_info = {"mode": "demo", "reason": str(e)}
 
 
 # ─── Demo Mode (when no .pt file is available) ────────────────────────────────
@@ -170,6 +263,31 @@ def health():
         "model_loaded": model is not None,
         "model_path": MODEL_PATH,
         "mode": "inference" if model is not None else "demo",
+        "model_summary": {
+            "parameters": model_info.get("total_parameters_millions", None),
+            "classes": model_info.get("num_classes", None),
+            "input_size": model_info.get("input_size", None),
+        } if model is not None else None,
+    }
+
+
+@app.get("/model-info")
+def get_model_info():
+    """
+    Return detailed information extracted from the loaded YOLO model.
+    Includes: architecture, parameter counts, class names, layer breakdown,
+    training config, file size, and more.
+    """
+    if model is None:
+        return {
+            "mode": "demo",
+            "message": "No model loaded. Running in demo mode with random detections.",
+            "expected_path": MODEL_PATH,
+            "posture_classes": POSTURE_CLASSES,
+        }
+    return {
+        "mode": "inference",
+        "info": model_info,
     }
 
 

@@ -8,7 +8,7 @@ from app.config import settings
 from app.database import engine
 from app.models import Base
 from app.inference import inference_client
-from app.routers import upload, sessions
+from app.routers import upload, sessions, database
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +53,7 @@ app.add_middleware(
 # Routers
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
 app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
+app.include_router(database.router, prefix="/api", tags=["Database Explorer"])
 
 
 @app.get("/health", tags=["Health"])
