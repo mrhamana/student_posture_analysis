@@ -13,6 +13,8 @@ const App: React.FC = () => {
   const {
     state,
     uploadFile,
+    loadModelInfo,
+    selectModel,
     pollProgress,
     selectSession,
     loadSessions,
@@ -21,7 +23,8 @@ const App: React.FC = () => {
   // Load sessions on mount
   useEffect(() => {
     loadSessions();
-  }, [loadSessions]);
+    loadModelInfo();
+  }, [loadSessions, loadModelInfo]);
 
   // Start polling after upload
   useEffect(() => {
@@ -102,6 +105,12 @@ const App: React.FC = () => {
               uploading={state.uploading}
               uploadProgress={state.uploadProgress}
               uploadError={state.uploadError}
+              models={state.modelInfo?.available_models || []}
+              selectedModel={state.selectedModel}
+              modelInfo={state.modelInfo}
+              modelsLoading={state.modelsLoading}
+              modelsError={state.modelsError}
+              onModelChange={selectModel}
             />
 
             {/* Progress */}

@@ -1,12 +1,19 @@
 import React, { useCallback, useState, useRef } from 'react';
 import { Upload, FileVideo, Image, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
+import type { ModelInfoResponse } from '../types';
 
 interface FileUploadProps {
   onUpload: (file: File) => Promise<string | null>;
   uploading: boolean;
   uploadProgress: number;
   uploadError: string | null;
+  models: string[];
+  selectedModel: string | null;
+  modelInfo?: ModelInfoResponse | null;
+  modelsLoading: boolean;
+  modelsError: string | null;
+  onModelChange: (modelName: string | null) => void;
 }
 
 const ACCEPTED_TYPES = [
@@ -26,6 +33,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   uploading,
   uploadProgress,
   uploadError,
+  models,
+  selectedModel,
+  modelInfo,
+  modelsLoading,
+  modelsError,
+  onModelChange,
 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -73,9 +86,50 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   );
 
   const error = validationError || uploadError;
+  const selectedInfo = selectedModel ? modelInfo?.info?.[selectedModel] : null;
 
   return (
     <div className="w-full">
+      <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-800">Model Selection</h3>
+          {modelsLoading && <span className="text-xs text-gray-500">Loading...</span>}
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <select
+            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-primary-500 focus:outline-none"
+            value={selectedModel || ''}
+            onChange={(e) => onModelChange(e.target.value || null)}
+            disabled={modelsLoading || models.length === 0}
+          >
+            <option value="" disabled>
+              {models.length ? 'Select a model' : 'No models available'}
+            </option>
+            {models.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+
+          <div className="text-xs text-gray-500">
+            Default: {modelInfo?.default_model || 'n/a'}
+          </div>
+        </div>
+
+        {modelsError && (
+          <div className="mt-2 text-xs text-red-600">{modelsError}</div>
+        )}
+
+        {selectedInfo && (
+          <div className="mt-3 grid gap-2 text-xs text-gray-600 sm:grid-cols-3">
+            <div>Params: {selectedInfo.total_parameters_millions ?? 'n/a'}M</div>
+            <div>Input: {selectedInfo.input_size ?? 'n/a'}</div>
+            <div>Size: {selectedInfo.file_size_mb ?? 'n/a'}MB</div>
+          </div>
+        )}
+      </div>
       <div
         className={clsx(
           'relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-12 transition-all duration-200',

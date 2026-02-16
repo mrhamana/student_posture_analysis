@@ -35,7 +35,8 @@ app = FastAPI(title="Posture Model Server", version="1.0.0")
 # ─── Model Loading ─────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(__file__).parent / "models"
-MODEL_PATH = os.environ.get("MODEL_PATH", str(MODEL_DIR / "best.pt"))
+MODEL_PATH = os.environ.get("MODEL_PATH", "")
+MODEL_PATHS = os.environ.get("MODEL_PATHS", "")
 
 # The 8 posture classes the model outputs
 POSTURE_CLASSES = [
@@ -49,20 +50,21 @@ POSTURE_CLASSES = [
     "Reading",
 ]
 
-model = None
-model_info: Dict[str, Any] = {}  # Extracted model metadata
+models: Dict[str, Any] = {}
+model_infos: Dict[str, Dict[str, Any]] = {}  # Extracted model metadata
+default_model_name: Optional[str] = None
 
 
-def _extract_model_info(yolo_model) -> Dict[str, Any]:
+def _extract_model_info(yolo_model, model_path: str) -> Dict[str, Any]:
     """Extract detailed metadata from a loaded YOLO model."""
     info: Dict[str, Any] = {}
     try:
         nn_model = yolo_model.model  # The underlying torch nn.Module
 
         # Basic identity
-        info["model_path"] = MODEL_PATH
+        info["model_path"] = model_path
         info["task"] = getattr(yolo_model, "task", "detect")
-        info["model_name"] = getattr(yolo_model, "ckpt_path", MODEL_PATH).split("/")[-1].split("\\")[-1]
+        info["model_name"] = getattr(yolo_model, "ckpt_path", model_path).split("/")[-1].split("\\")[-1]
 
         # Class names
         names = yolo_model.names  # dict {0: 'Listening', 1: 'Looking Screen', ...}
@@ -129,8 +131,8 @@ def _extract_model_info(yolo_model) -> Dict[str, Any]:
                     }
 
         # File size
-        if os.path.exists(MODEL_PATH):
-            size_bytes = os.path.getsize(MODEL_PATH)
+        if os.path.exists(model_path):
+            size_bytes = os.path.getsize(model_path)
             info["file_size_mb"] = round(size_bytes / (1024 * 1024), 2)
 
     except Exception as e:
@@ -140,28 +142,74 @@ def _extract_model_info(yolo_model) -> Dict[str, Any]:
     return info
 
 
-def load_model():
-    """Load the YOLO model from the .pt file."""
-    global model, model_info
+def _get_candidate_model_paths() -> List[str]:
+    paths: List[str] = []
+
+    if MODEL_PATHS:
+        for p in MODEL_PATHS.split(os.pathsep):
+            p = p.strip()
+            if p:
+                paths.append(p)
+
+    if MODEL_PATH:
+        paths.append(MODEL_PATH)
+
+    # Auto-discover models in the models folder
+    for p in sorted(MODEL_DIR.glob("*.pt")):
+        paths.append(str(p))
+
+    # De-duplicate while preserving order
+    unique_paths: List[str] = []
+    seen = set()
+    for p in paths:
+        if p not in seen:
+            unique_paths.append(p)
+            seen.add(p)
+    return unique_paths
+
+
+def load_models():
+    """Load YOLO models from the .pt files."""
+    global models, model_infos, default_model_name
     try:
         from ultralytics import YOLO
 
-        if not os.path.exists(MODEL_PATH):
-            logger.warning(
-                f"Model file not found at {MODEL_PATH}. Using demo mode (random detections)."
-            )
-            model = None
-            model_info = {"mode": "demo", "reason": "Model file not found"}
-            return
-        model = YOLO(MODEL_PATH)
-        model_info = _extract_model_info(model)
-        logger.info(f"Model loaded successfully from {MODEL_PATH}")
-        logger.info(f"Model info: {model_info.get('total_parameters_millions', '?')}M params, "
-                     f"{model_info.get('num_classes', '?')} classes")
+        models = {}
+        model_infos = {}
+        default_model_name = None
+
+        candidate_paths = _get_candidate_model_paths()
+        loaded_any = False
+
+        for model_path in candidate_paths:
+            if not os.path.exists(model_path):
+                continue
+            try:
+                yolo_model = YOLO(model_path)
+                model_name = Path(model_path).name
+                models[model_name] = yolo_model
+                model_infos[model_name] = _extract_model_info(yolo_model, model_path)
+                loaded_any = True
+                if default_model_name is None:
+                    default_model_name = model_name
+                logger.info(f"Model loaded successfully from {model_path}")
+            except Exception as e:
+                logger.error(f"Failed to load model at {model_path}: {e}")
+
+        if not loaded_any:
+            logger.warning("No model files found. Using demo mode (random detections).")
+            models = {}
+            model_infos = {}
+            default_model_name = None
     except Exception as e:
-        logger.error(f"Failed to load model: {e}. Running in demo mode.")
-        model = None
-        model_info = {"mode": "demo", "reason": str(e)}
+        logger.error(f"Failed to load models: {e}. Running in demo mode.")
+        models = {}
+        model_infos = {}
+        default_model_name = None
+
+
+def _list_model_files() -> List[str]:
+    return sorted([p.name for p in MODEL_DIR.glob("*.pt")])
 
 
 # ─── Demo Mode (when no .pt file is available) ────────────────────────────────
@@ -205,13 +253,25 @@ def _generate_demo_detections(
 # ─── Real Inference ────────────────────────────────────────────────────────────
 
 
-def _run_inference_on_frame(frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
+def _resolve_model_name(requested: Optional[str]) -> Optional[str]:
+    if requested and requested in models:
+        return requested
+    return default_model_name
+
+
+def _run_inference_on_frame(
+    frame: np.ndarray,
+    frame_id: int,
+    requested_model: Optional[str] = None,
+) -> Dict[str, Any]:
     """Run the actual YOLO model on a single frame."""
-    if model is None:
+    model_name = _resolve_model_name(requested_model)
+    if model_name is None:
         h, w = frame.shape[:2]
         return _generate_demo_detections(frame_id, w, h)
 
-    results = model.track(frame, persist=True, verbose=False)
+    yolo_model = models[model_name]
+    results = yolo_model.track(frame, persist=True, verbose=False)
     students = []
 
     for result in results:
@@ -245,7 +305,7 @@ def _run_inference_on_frame(frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
                 }
             )
 
-    return {"frame_id": frame_id, "students": students}
+    return {"frame_id": frame_id, "students": students, "model": model_name}
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────────────
@@ -253,21 +313,19 @@ def _run_inference_on_frame(frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
 
 @app.on_event("startup")
 def startup():
-    load_model()
+    load_models()
 
 
 @app.get("/health")
 def health():
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
-        "model_path": MODEL_PATH,
-        "mode": "inference" if model is not None else "demo",
-        "model_summary": {
-            "parameters": model_info.get("total_parameters_millions", None),
-            "classes": model_info.get("num_classes", None),
-            "input_size": model_info.get("input_size", None),
-        } if model is not None else None,
+        "model_loaded": len(models) > 0,
+        "mode": "inference" if len(models) > 0 else "demo",
+        "default_model": default_model_name,
+        "available_models": sorted(models.keys()),
+        "model_dir": str(MODEL_DIR),
+        "discovered_models": _list_model_files(),
     }
 
 
@@ -278,16 +336,21 @@ def get_model_info():
     Includes: architecture, parameter counts, class names, layer breakdown,
     training config, file size, and more.
     """
-    if model is None:
+    if len(models) == 0:
+        load_models()
+    if len(models) == 0:
         return {
             "mode": "demo",
             "message": "No model loaded. Running in demo mode with random detections.",
-            "expected_path": MODEL_PATH,
             "posture_classes": POSTURE_CLASSES,
+            "model_dir": str(MODEL_DIR),
+            "available_models": _list_model_files(),
         }
     return {
         "mode": "inference",
-        "info": model_info,
+        "default_model": default_model_name,
+        "available_models": sorted(models.keys()),
+        "info": model_infos,
     }
 
 
@@ -295,6 +358,7 @@ def get_model_info():
 async def predict(
     file: UploadFile = File(...),
     mode: str = Query("image", regex="^(image|video)$"),
+    model: Optional[str] = Query(None),
 ):
     """
     Run posture detection on an image or video.
@@ -307,16 +371,19 @@ async def predict(
     if len(contents) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
 
+    if len(models) == 0:
+        load_models()
+
     if mode == "image":
-        return await _process_image(contents)
+        return await _process_image(contents, model)
     else:
         return StreamingResponse(
-            _process_video_stream(contents),
+            _process_video_stream(contents, model),
             media_type="application/x-ndjson",
         )
 
 
-async def _process_image(contents: bytes) -> Dict[str, Any]:
+async def _process_image(contents: bytes, requested_model: Optional[str]) -> Dict[str, Any]:
     """Process a single image."""
     try:
         nparr = np.frombuffer(contents, np.uint8)
@@ -326,11 +393,11 @@ async def _process_image(contents: bytes) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
-    result = _run_inference_on_frame(frame, frame_id=0)
+    result = _run_inference_on_frame(frame, frame_id=0, requested_model=requested_model)
     return result
 
 
-async def _process_video_stream(contents: bytes):
+async def _process_video_stream(contents: bytes, requested_model: Optional[str]):
     """Process video frame by frame and yield NDJSON."""
     # Write to temp file (OpenCV needs a file path)
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
@@ -353,7 +420,11 @@ async def _process_video_stream(contents: bytes):
                 break
 
             if frame_id % skip_frames == 0:
-                result = _run_inference_on_frame(frame, frame_id)
+                result = _run_inference_on_frame(
+                    frame,
+                    frame_id,
+                    requested_model=requested_model,
+                )
                 yield json.dumps(result) + "\n"
 
             frame_id += 1

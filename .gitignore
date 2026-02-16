@@ -17,7 +17,7 @@ frontend/.vite/
 
 # Uploads
 backend/uploads/
-
+model_server/models
 # Docker volumes
 pgdata/
 

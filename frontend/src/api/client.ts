@@ -6,6 +6,7 @@ import type {
   UploadResponse,
   ProcessingProgress,
   PostureRecordData,
+  ModelInfoResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -38,20 +39,34 @@ class ApiClient {
 
   async uploadMedia(
     file: File,
+    modelName?: string | null,
     onProgress?: (percent: number) => void,
   ): Promise<UploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
 
+    const params: Record<string, string> = {};
+    if (modelName) {
+      params.model = modelName;
+    }
+
     const response = await this.client.post<UploadResponse>('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000, // 5 min for large files
+      params,
       onUploadProgress: (event) => {
         if (event.total && onProgress) {
           onProgress(Math.round((event.loaded / event.total) * 100));
         }
       },
     });
+    return response.data;
+  }
+
+  // --- Models ---
+
+  async getModelInfo(): Promise<ModelInfoResponse> {
+    const response = await this.client.get<ModelInfoResponse>('/models');
     return response.data;
   }
 

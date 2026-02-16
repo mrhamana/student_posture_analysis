@@ -108,6 +108,28 @@ export interface ProcessingProgress {
   progress_percent: number;
 }
 
+// --- Model metadata ---
+
+export interface ModelDetails {
+  model_path?: string;
+  model_name?: string;
+  task?: string;
+  num_classes?: number;
+  class_names?: Record<string, string>;
+  total_parameters_millions?: number;
+  input_size?: number;
+  file_size_mb?: number;
+}
+
+export interface ModelInfoResponse {
+  mode: 'inference' | 'demo';
+  default_model?: string | null;
+  available_models?: string[];
+  info?: Record<string, ModelDetails>;
+  message?: string;
+  posture_classes?: string[];
+}
+
 // --- Detection overlay types ---
 
 export interface DetectionOverlay {

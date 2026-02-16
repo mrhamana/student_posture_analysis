@@ -1,6 +1,6 @@
 import httpx
 import logging
-from typing import List, AsyncIterator
+from typing import List, AsyncIterator, Optional, Dict, Any
 from app.config import settings
 from app.schemas import InferenceFrameResult
 
@@ -65,34 +65,40 @@ class InferenceClient:
         raise last_exception  # type: ignore
 
     async def analyze_image(
-        self, file_content: bytes, filename: str
+        self, file_content: bytes, filename: str, model_name: Optional[str] = None
     ) -> InferenceFrameResult:
         """Send a single image to the inference API."""
         files = {"file": (filename, file_content)}
+        params = {"mode": "image"}
+        if model_name:
+            params["model"] = model_name
         response = await self._retry_request(
             "POST",
             settings.INFERENCE_API_URL,
             files=files,
-            params={"mode": "image"},
+            params=params,
         )
         data = response.json()
         return InferenceFrameResult(**data)
 
     async def analyze_video_stream(
-        self, file_content: bytes, filename: str
+        self, file_content: bytes, filename: str, model_name: Optional[str] = None
     ) -> AsyncIterator[InferenceFrameResult]:
         """Send video to inference API and stream frame-by-frame results."""
         import json
 
         files = {"file": (filename, file_content)}
         client = await self._get_client()
+        params = {"mode": "video"}
+        if model_name:
+            params["model"] = model_name
 
         try:
             async with client.stream(
                 "POST",
                 settings.INFERENCE_API_URL,
                 files=files,
-                params={"mode": "video"},
+                params=params,
                 timeout=httpx.Timeout(
                     connect=10.0,
                     read=300.0,  # Videos can take long
@@ -127,6 +133,13 @@ class InferenceClient:
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
             logger.error(f"Video streaming inference failed: {e}")
             raise
+
+    async def get_model_info(self) -> Dict[str, Any]:
+        """Fetch model metadata from the model server."""
+        base_url = settings.INFERENCE_API_URL.rsplit("/", 1)[0]
+        url = f"{base_url}/model-info"
+        response = await self._retry_request("GET", url)
+        return response.json()
 
 
 inference_client = InferenceClient()

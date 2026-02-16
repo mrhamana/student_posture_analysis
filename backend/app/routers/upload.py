@@ -4,7 +4,7 @@ import asyncio
 from uuid import UUID
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -29,7 +29,12 @@ def _determine_media_type(content_type: str) -> MediaType:
     raise ValueError(f"Unsupported content type: {content_type}")
 
 
-async def _process_image(session_id: UUID, file_content: bytes, filename: str):
+async def _process_image(
+    session_id: UUID,
+    file_content: bytes,
+    filename: str,
+    model_name: Optional[str],
+):
     """Background task: process a single image."""
     from app.database import AsyncSessionLocal
 
@@ -39,7 +44,11 @@ async def _process_image(session_id: UUID, file_content: bytes, filename: str):
                 db, session_id, SessionStatus.PROCESSING, total_frames=1
             )
 
-            result = await inference_client.analyze_image(file_content, filename)
+            result = await inference_client.analyze_image(
+                file_content,
+                filename,
+                model_name=model_name,
+            )
 
             student_last_posture = {}
             await AnalysisService.process_frame_result(
@@ -61,7 +70,12 @@ async def _process_image(session_id: UUID, file_content: bytes, filename: str):
             )
 
 
-async def _process_video(session_id: UUID, file_content: bytes, filename: str):
+async def _process_video(
+    session_id: UUID,
+    file_content: bytes,
+    filename: str,
+    model_name: Optional[str],
+):
     """Background task: process video with streaming inference."""
     from app.database import AsyncSessionLocal
 
@@ -75,7 +89,9 @@ async def _process_video(session_id: UUID, file_content: bytes, filename: str):
             batch_count = 0
 
             async for frame_result in inference_client.analyze_video_stream(
-                file_content, filename
+                file_content,
+                filename,
+                model_name=model_name,
             ):
                 student_last_posture = await AnalysisService.process_frame_result(
                     db, session_id, frame_result, student_last_posture
@@ -119,6 +135,7 @@ async def _process_video(session_id: UUID, file_content: bytes, filename: str):
 async def upload_media(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    model: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     # Validate content type
@@ -153,9 +170,21 @@ async def upload_media(
 
     # Process in background
     if media_type == MediaType.IMAGE:
-        background_tasks.add_task(_process_image, session.id, file_content, filename)
+        background_tasks.add_task(
+            _process_image,
+            session.id,
+            file_content,
+            filename,
+            model,
+        )
     else:
-        background_tasks.add_task(_process_video, session.id, file_content, filename)
+        background_tasks.add_task(
+            _process_video,
+            session.id,
+            file_content,
+            filename,
+            model,
+        )
 
     return UploadResponse(
         session_id=session.id,

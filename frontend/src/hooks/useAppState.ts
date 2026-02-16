@@ -8,6 +8,7 @@ import type {
   UploadResponse,
   ProcessingProgress,
   SessionStatus,
+  ModelInfoResponse,
 } from '../types';
 
 // --- State Shape ---
@@ -17,6 +18,12 @@ interface AppState {
   uploading: boolean;
   uploadProgress: number;
   uploadError: string | null;
+
+  // Models
+  modelInfo: ModelInfoResponse | null;
+  modelsLoading: boolean;
+  modelsError: string | null;
+  selectedModel: string | null;
 
   // Current session
   currentSessionId: string | null;
@@ -44,6 +51,10 @@ const initialState: AppState = {
   uploading: false,
   uploadProgress: 0,
   uploadError: null,
+  modelInfo: null,
+  modelsLoading: false,
+  modelsError: null,
+  selectedModel: null,
   currentSessionId: null,
   session: null,
   sessionLoading: false,
@@ -66,6 +77,10 @@ type Action =
   | { type: 'UPLOAD_PROGRESS'; payload: number }
   | { type: 'UPLOAD_SUCCESS'; payload: UploadResponse }
   | { type: 'UPLOAD_ERROR'; payload: string }
+  | { type: 'SET_MODELS_LOADING' }
+  | { type: 'SET_MODEL_INFO'; payload: ModelInfoResponse }
+  | { type: 'SET_MODELS_ERROR'; payload: string }
+  | { type: 'SET_SELECTED_MODEL'; payload: string | null }
   | { type: 'SET_SESSION_LOADING' }
   | { type: 'SET_SESSION'; payload: SessionData }
   | { type: 'SET_SESSION_ERROR'; payload: string }
@@ -93,6 +108,14 @@ function reducer(state: AppState, action: Action): AppState {
       };
     case 'UPLOAD_ERROR':
       return { ...state, uploading: false, uploadError: action.payload };
+    case 'SET_MODELS_LOADING':
+      return { ...state, modelsLoading: true, modelsError: null };
+    case 'SET_MODEL_INFO':
+      return { ...state, modelInfo: action.payload, modelsLoading: false };
+    case 'SET_MODELS_ERROR':
+      return { ...state, modelsError: action.payload, modelsLoading: false };
+    case 'SET_SELECTED_MODEL':
+      return { ...state, selectedModel: action.payload };
     case 'SET_SESSION_LOADING':
       return { ...state, sessionLoading: true, sessionError: null };
     case 'SET_SESSION':
@@ -155,7 +178,7 @@ export function useAppState() {
   const uploadFile = useCallback(async (file: File) => {
     dispatch({ type: 'UPLOAD_START' });
     try {
-      const result = await api.uploadMedia(file, (percent) => {
+      const result = await api.uploadMedia(file, state.selectedModel, (percent) => {
         dispatch({ type: 'UPLOAD_PROGRESS', payload: percent });
       });
       dispatch({ type: 'UPLOAD_SUCCESS', payload: result });
@@ -165,6 +188,26 @@ export function useAppState() {
       dispatch({ type: 'UPLOAD_ERROR', payload: message });
       return null;
     }
+  }, [state.selectedModel]);
+
+  const loadModelInfo = useCallback(async () => {
+    dispatch({ type: 'SET_MODELS_LOADING' });
+    try {
+      const info = await api.getModelInfo();
+      dispatch({ type: 'SET_MODEL_INFO', payload: info });
+
+      if (!state.selectedModel) {
+        const defaultModel = info.default_model || info.available_models?.[0] || null;
+        dispatch({ type: 'SET_SELECTED_MODEL', payload: defaultModel });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load models';
+      dispatch({ type: 'SET_MODELS_ERROR', payload: message });
+    }
+  }, [state.selectedModel]);
+
+  const selectModel = useCallback((modelName: string | null) => {
+    dispatch({ type: 'SET_SELECTED_MODEL', payload: modelName });
   }, []);
 
   const loadSession = useCallback(async (sessionId: string) => {
@@ -269,6 +312,8 @@ export function useAppState() {
   return {
     state,
     uploadFile,
+    loadModelInfo,
+    selectModel,
     loadSession,
     loadResults,
     pollProgress,
