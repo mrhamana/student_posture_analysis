@@ -10,8 +10,8 @@ from sqlalchemy import (
     Enum as SAEnum,
     Text,
     Index,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 import enum
 
@@ -46,7 +46,7 @@ class PostureClass(str, enum.Enum):
 class Session(Base):
     __tablename__ = "sessions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     filename = Column(String(512), nullable=False)
     media_type = Column(SAEnum(MediaType), nullable=False)
     status = Column(
@@ -76,7 +76,7 @@ class Student(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("sessions.id", ondelete="CASCADE"),
         nullable=False,
     )

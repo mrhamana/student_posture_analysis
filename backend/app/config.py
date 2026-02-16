@@ -4,10 +4,8 @@ import os
 
 
 class Settings(BaseSettings):
-    # Database
-    DATABASE_URL: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/posture_analysis"
-    )
+    # Database (SQLite for local development)
+    DATABASE_URL: str = "sqlite+aiosqlite:///./posture_analysis.db"
 
     # Inference API (model_server)
     INFERENCE_API_URL: str = "http://localhost:8001/predict"

@@ -35,7 +35,7 @@ app = FastAPI(title="Posture Model Server", version="1.0.0")
 # ─── Model Loading ─────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(__file__).parent / "models"
-MODEL_PATH = os.environ.get("MODEL_PATH", str(MODEL_DIR / "posture_model.pt"))
+MODEL_PATH = os.environ.get("MODEL_PATH", str(MODEL_DIR / "best.pt"))
 
 # The 8 posture classes the model outputs
 POSTURE_CLASSES = [
