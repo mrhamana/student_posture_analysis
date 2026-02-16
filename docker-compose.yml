@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: posture_analysis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  model_server:
+    build:
+      context: ./model_server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      MODEL_PATH: /app/models/posture_model.pt
+      SKIP_FRAMES: "5"
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./model_server/models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/posture_analysis
+      INFERENCE_API_URL: http://model_server:8001/predict
+      INFERENCE_API_TIMEOUT: 60
+      CORS_ORIGINS: http://localhost,http://localhost:80,http://localhost:5173
+      MAX_UPLOAD_SIZE_MB: 500
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      model_server:
+        condition: service_started
+    volumes:
+      - uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:
