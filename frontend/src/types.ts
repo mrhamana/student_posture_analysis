@@ -138,3 +138,17 @@ export interface DetectionOverlay {
   posture: PostureClass;
   confidence: number;
 }
+
+// --- Annotated image metadata ---
+
+export interface AnnotatedDetection {
+  tracker_id: number;
+  posture: PostureClass;
+  confidence: number;
+  bbox: [number, number, number, number];
+}
+
+export interface AnnotatedImageMetadataResponse {
+  frame_id: number;
+  detections: AnnotatedDetection[];
+}

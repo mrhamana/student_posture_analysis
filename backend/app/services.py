@@ -139,6 +139,18 @@ class StudentService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_student_by_tracker_id(
+        db: AsyncSession, session_id: UUID, tracker_id: int
+    ) -> Optional[Student]:
+        result = await db.execute(
+            select(Student).where(
+                Student.session_id == session_id,
+                Student.tracker_id == tracker_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def update_posture_changes(
         db: AsyncSession,
         student_id: int,
@@ -176,6 +188,43 @@ class PostureRecordService:
             .where(PostureRecord.student_id == student_id)
             .order_by(PostureRecord.frame_id.desc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_latest_record_by_student(
+        db: AsyncSession, student_id: int
+    ) -> Optional[PostureRecord]:
+        result = await db.execute(
+            select(PostureRecord)
+            .where(PostureRecord.student_id == student_id)
+            .order_by(PostureRecord.frame_id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_latest_frame_id_by_session(
+        db: AsyncSession, session_id: UUID
+    ) -> Optional[int]:
+        result = await db.execute(
+            select(func.max(PostureRecord.frame_id))
+            .join(Student)
+            .where(Student.session_id == session_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_records_by_session_and_frame(
+        db: AsyncSession, session_id: UUID, frame_id: int
+    ) -> List[PostureRecord]:
+        result = await db.execute(
+            select(PostureRecord)
+            .join(Student)
+            .where(
+                Student.session_id == session_id,
+                PostureRecord.frame_id == frame_id,
+            )
         )
         return list(result.scalars().all())
 

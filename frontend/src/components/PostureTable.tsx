@@ -3,6 +3,8 @@ import { Search, ArrowUpDown, Filter } from 'lucide-react';
 import clsx from 'clsx';
 import type { PostureSummaryData, PostureClass } from '../types';
 import { POSTURE_CLASSES, POSTURE_COLORS } from '../types';
+import { getStudentProfile } from '../data/studentProfiles';
+import { StudentAvatar } from './StudentAvatar';
 
 interface PostureTableProps {
   summary: PostureSummaryData;
@@ -148,13 +150,29 @@ export const PostureTable: React.FC<PostureTableProps> = ({ summary }) => {
               filteredStudents.map((student) => {
                 const postureColor =
                   POSTURE_COLORS[student.current_posture as PostureClass] || '#6b7280';
+                const profile = getStudentProfile(student.tracker_id);
                 return (
                   <tr
                     key={student.tracker_id}
                     className="transition-colors hover:bg-gray-50"
                   >
                     <td className="px-4 py-3 font-medium text-gray-900">
-                      #{student.tracker_id}
+                      <div className="group relative inline-flex items-center gap-2">
+                        <StudentAvatar profile={profile} sizeClassName="h-7 w-7" />
+                        <span>#{student.tracker_id}</span>
+
+                        <div className="pointer-events-none absolute left-0 top-full z-10 hidden w-52 rounded-lg border border-gray-200 bg-white p-3 shadow-lg group-hover:block">
+                          <div className="flex items-center gap-3">
+                            <StudentAvatar profile={profile} sizeClassName="h-12 w-12" />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-gray-900">
+                                {profile.name}
+                              </p>
+                              <p className="text-xs text-gray-500">Assigned ID: #{profile.trackerId}</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span

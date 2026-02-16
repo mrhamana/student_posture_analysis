@@ -12,6 +12,7 @@ import {
 import { Users, Activity, TrendingUp, Eye } from 'lucide-react';
 import type { PostureSummaryData, PostureClass } from '../types';
 import { POSTURE_COLORS } from '../types';
+import { StudentGallery } from './StudentGallery';
 
 interface SessionSummaryProps {
   summary: PostureSummaryData;
@@ -72,6 +73,8 @@ export const SessionSummary: React.FC<SessionSummaryProps> = ({ summary }) => {
           </div>
         ))}
       </div>
+
+      <StudentGallery summary={summary} />
 
       {/* Distribution Chart */}
       <div className="card">

@@ -95,6 +95,21 @@ class PostureRecordListResponse(BaseModel):
     total: int
 
 
+# --- Annotated Image Schemas ---
+
+
+class AnnotatedDetection(BaseModel):
+    tracker_id: int
+    posture: str
+    confidence: float
+    bbox: List[float] = Field(..., min_length=4, max_length=4)
+
+
+class AnnotatedImageMetadataResponse(BaseModel):
+    frame_id: int
+    detections: List[AnnotatedDetection]
+
+
 # --- Posture Summary Schemas ---
 
 

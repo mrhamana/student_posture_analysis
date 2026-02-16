@@ -7,6 +7,7 @@ import { PostureTable } from './components/PostureTable';
 import { SessionSummary } from './components/SessionSummary';
 import { ProgressBar } from './components/ProgressBar';
 import { SessionList } from './components/SessionList';
+import { AnnotatedPanel } from './components/AnnotatedPanel';
 import type { DetectionOverlay, PostureClass } from './types';
 
 const App: React.FC = () => {
@@ -136,6 +137,14 @@ const App: React.FC = () => {
                       detections={detections}
                     />
                   </div>
+                )}
+
+                {state.currentSessionId && (
+                  <AnnotatedPanel
+                    sessionId={state.currentSessionId}
+                    sessionUpdatedAt={state.session?.updated_at}
+                    summary={state.summary}
+                  />
                 )}
 
                 {/* Table */}

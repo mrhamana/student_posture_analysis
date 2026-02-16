@@ -7,6 +7,7 @@ import type {
   ProcessingProgress,
   PostureRecordData,
   ModelInfoResponse,
+  AnnotatedImageMetadataResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -111,6 +112,11 @@ class ApiClient {
     sessionId: string,
   ): Promise<{ records: PostureRecordData[]; total: number }> {
     const response = await this.client.get(`/session/${sessionId}/records`);
+    return response.data;
+  }
+
+  async getAnnotatedMetadata(sessionId: string): Promise<AnnotatedImageMetadataResponse> {
+    const response = await this.client.get(`/session/${sessionId}/annotated-metadata`);
     return response.data;
   }
 }

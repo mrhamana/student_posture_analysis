@@ -24,6 +24,8 @@ from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException
 from fastapi.responses import StreamingResponse
 import uvicorn
+import torch
+import torch.nn.functional as F
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -37,6 +39,9 @@ app = FastAPI(title="Posture Model Server", version="1.0.0")
 MODEL_DIR = Path(__file__).parent / "models"
 MODEL_PATH = os.environ.get("MODEL_PATH", "")
 MODEL_PATHS = os.environ.get("MODEL_PATHS", "")
+GNN_MODEL_PATH = os.environ.get(
+    "GNN_MODEL_PATH", str(MODEL_DIR / "gnn_posture.pt")
+)
 
 # The 8 posture classes the model outputs
 POSTURE_CLASSES = [
@@ -53,6 +58,30 @@ POSTURE_CLASSES = [
 models: Dict[str, Any] = {}
 model_infos: Dict[str, Dict[str, Any]] = {}  # Extracted model metadata
 default_model_name: Optional[str] = None
+gnn_model: Optional[torch.nn.Module] = None
+gnn_info: Dict[str, Any] = {}
+gnn_device: str = "cpu"
+
+try:
+    from torch_geometric.nn import GATConv
+    HAS_PYG = True
+except Exception:
+    HAS_PYG = False
+
+
+class GNNClassifier(torch.nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, num_classes: int, heads: int = 4):
+        super().__init__()
+        self.conv1 = GATConv(input_dim, hidden_dim, heads=heads, concat=True)
+        self.conv2 = GATConv(hidden_dim * heads, hidden_dim, heads=1, concat=False)
+        self.lin = torch.nn.Linear(hidden_dim, num_classes)
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(x, edge_index)
+        x = F.elu(x)
+        x = self.conv2(x, edge_index)
+        x = F.elu(x)
+        return self.lin(x)
 
 
 def _extract_model_info(yolo_model, model_path: str) -> Dict[str, Any]:
@@ -208,6 +237,56 @@ def load_models():
         default_model_name = None
 
 
+def _load_gnn_model():
+    global gnn_model, gnn_info, gnn_device
+
+    gnn_model = None
+    gnn_info = {}
+
+    if not HAS_PYG:
+        logger.warning("torch_geometric not available; GNN refinement disabled.")
+        return
+
+    if not os.path.exists(GNN_MODEL_PATH):
+        logger.info("No GNN model found at %s; GNN refinement disabled.", GNN_MODEL_PATH)
+        return
+
+    gnn_device = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        checkpoint = torch.load(GNN_MODEL_PATH, map_location=gnn_device)
+
+        if isinstance(checkpoint, dict):
+            state_dict = (
+                checkpoint.get("model_state_dict")
+                or checkpoint.get("state_dict")
+                or checkpoint
+            )
+            input_dim = int(checkpoint.get("input_dim", 7 + len(POSTURE_CLASSES)))
+            num_classes = int(checkpoint.get("num_classes", len(POSTURE_CLASSES)))
+            hidden_dim = int(checkpoint.get("hidden_dim", 64))
+        else:
+            raise ValueError("Unsupported GNN checkpoint format")
+
+        model = GNNClassifier(input_dim=input_dim, hidden_dim=hidden_dim, num_classes=num_classes)
+        model.load_state_dict(state_dict, strict=False)
+        model.to(gnn_device)
+        model.eval()
+
+        gnn_model = model
+        gnn_info = {
+            "model_path": GNN_MODEL_PATH,
+            "input_dim": input_dim,
+            "num_classes": num_classes,
+            "hidden_dim": hidden_dim,
+            "device": gnn_device,
+        }
+        logger.info("GNN model loaded successfully from %s", GNN_MODEL_PATH)
+    except Exception as e:
+        logger.error("Failed to load GNN model: %s", e)
+        gnn_model = None
+        gnn_info = {}
+
+
 def _list_model_files() -> List[str]:
     return sorted([p.name for p in MODEL_DIR.glob("*.pt")])
 
@@ -302,10 +381,99 @@ def _run_inference_on_frame(
                     "bbox": [round(b, 1) for b in bbox],
                     "posture": posture,
                     "confidence": round(conf, 4),
+                    "_class_id": cls_id,
                 }
             )
 
+    if gnn_model is not None:
+        students = _apply_gnn_refinement(students, frame.shape)
+
+    for student in students:
+        student.pop("_class_id", None)
+
     return {"frame_id": frame_id, "students": students, "model": model_name}
+
+
+def _build_gnn_features(
+    students: List[Dict[str, Any]], frame_shape: tuple
+) -> torch.Tensor:
+    height, width = frame_shape[:2]
+    num_classes = len(POSTURE_CLASSES)
+    expected_dim = int(gnn_info.get("input_dim", 7 + num_classes))
+
+    features = []
+    for student in students:
+        x1, y1, x2, y2 = student["bbox"]
+        conf = float(student["confidence"])
+        cls_id = int(student.get("_class_id", 0))
+
+        nx1 = x1 / max(width, 1)
+        ny1 = y1 / max(height, 1)
+        nx2 = x2 / max(width, 1)
+        ny2 = y2 / max(height, 1)
+        w = max(nx2 - nx1, 0.0)
+        h = max(ny2 - ny1, 0.0)
+
+        one_hot = [0.0] * num_classes
+        if 0 <= cls_id < num_classes:
+            one_hot[cls_id] = 1.0
+
+        # Feature vector: bbox geometry + conf + class one-hot
+        features.append([nx1, ny1, nx2, ny2, w, h, conf] + one_hot)
+
+    x = torch.tensor(features, dtype=torch.float32, device=gnn_device)
+    if x.size(1) < expected_dim:
+        pad = torch.zeros((x.size(0), expected_dim - x.size(1)), device=gnn_device)
+        x = torch.cat([x, pad], dim=1)
+    elif x.size(1) > expected_dim:
+        x = x[:, :expected_dim]
+    return x
+
+
+def _build_edge_index(centers: torch.Tensor, k: int = 5) -> torch.Tensor:
+    num_nodes = centers.size(0)
+    if num_nodes < 2:
+        return torch.empty((2, 0), dtype=torch.long, device=centers.device)
+
+    dist = torch.cdist(centers, centers)
+    k = min(k, num_nodes - 1)
+    knn = dist.argsort(dim=1)[:, 1 : k + 1]
+
+    row = torch.arange(num_nodes, device=centers.device).unsqueeze(1).repeat(1, k).reshape(-1)
+    col = knn.reshape(-1)
+
+    edge_index = torch.stack([torch.cat([row, col]), torch.cat([col, row])], dim=0)
+    return edge_index
+
+
+def _apply_gnn_refinement(
+    students: List[Dict[str, Any]], frame_shape: tuple
+) -> List[Dict[str, Any]]:
+    if gnn_model is None or len(students) < 2:
+        return students
+
+    try:
+        x = _build_gnn_features(students, frame_shape)
+        centers = x[:, 0:2] + (x[:, 2:4] - x[:, 0:2]) / 2.0
+        edge_index = _build_edge_index(centers)
+
+        with torch.no_grad():
+            logits = gnn_model(x, edge_index)
+            probs = torch.softmax(logits, dim=1)
+            gnn_conf, gnn_cls = probs.max(dim=1)
+
+        for idx, student in enumerate(students):
+            new_conf = float(gnn_conf[idx].item())
+            if new_conf >= float(student.get("confidence", 0.0)):
+                cls_id = int(gnn_cls[idx].item())
+                if 0 <= cls_id < len(POSTURE_CLASSES):
+                    student["posture"] = POSTURE_CLASSES[cls_id]
+                    student["confidence"] = round(new_conf, 4)
+
+    except Exception as e:
+        logger.warning("GNN refinement failed: %s", e)
+
+    return students
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────────────
@@ -314,6 +482,7 @@ def _run_inference_on_frame(
 @app.on_event("startup")
 def startup():
     load_models()
+    _load_gnn_model()
 
 
 @app.get("/health")
@@ -326,6 +495,8 @@ def health():
         "available_models": sorted(models.keys()),
         "model_dir": str(MODEL_DIR),
         "discovered_models": _list_model_files(),
+        "gnn_loaded": gnn_model is not None,
+        "gnn_info": gnn_info or None,
     }
 
 
